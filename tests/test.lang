@@ -1,0 +1,10 @@
+Test = struct {
+	w: i32,
+	wjatever: i32
+}
+
+main = () {
+	test: Test = Test {.w = 10};
+	ret test.w + 10;
+}
+
