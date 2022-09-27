@@ -61,6 +61,11 @@ impl<'source> Emit<'source> {
 		self
 	}
 
+	pub fn with_eoi_span(mut self) -> Self {
+		self.span = self.map.eoi_span();
+		self
+	}
+
 	pub fn with_type(mut self, emit_type: EmitType) -> Self {
 		self.emit_type = emit_type;
 		self

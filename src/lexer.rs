@@ -61,7 +61,13 @@ impl<'source> SourceMap<'source> {
 				return Loc::new(self.file, i + 1, column + 1);
 			}
 		}
-		return Loc::new(self.file, self.lines.len(), self.lines.last().unwrap().len() + 1);
+		let (range, _) = self.lines.last().unwrap();
+		return Loc::new(self.file, self.lines.len(), span.start - range.start + 1);
+	}
+
+	pub fn eoi_span(&self) -> Span {
+		let (range, _) = self.lines.last().unwrap_or(&(0..0, ""));
+		range.end..range.end
 	}
 }
 

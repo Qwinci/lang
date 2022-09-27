@@ -5,13 +5,17 @@ pub type Spanned<T> = (T, Span);
 
 #[derive(Debug, Clone)]
 pub enum Expr {
+	Error,
 	Num(u64),
 
-	Add(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
-	Sub(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
-	Mul(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
-	Div(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
-	Mod(Box<Spanned<Expr>>, Box<Spanned<Expr>>),
+	Neg(Box<Expr>),
+	Add(Box<Expr>, Box<Expr>),
+	Sub(Box<Expr>, Box<Expr>),
+	Mul(Box<Expr>, Box<Expr>),
+	Div(Box<Expr>, Box<Expr>),
+	Mod(Box<Expr>, Box<Expr>),
+	And(Box<Expr>, Box<Expr>),
+	Or(Box<Expr>, Box<Expr>),
 
 	Struct {
 		fields: HashMap<String, String>
