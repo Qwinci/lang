@@ -11,20 +11,21 @@ mod ast;
 mod diagnostics;
 
 macro_rules! word_count_stderr {
-    ($test_num:expr, $word:expr) => {{
+    ($test_num:expr, $word:expr, $count:expr) => {{
 	    let output = Command::new("target/debug/lang")
 	        .arg("--test")
 	        .arg(($test_num).to_string())
 	        .output().unwrap();
 	    let output = unsafe { String::from_utf8_unchecked(output.stderr) };
-		output.matches($word).count()
+		if output.matches($word).count() != $count {
+		    panic!("{}", output);
+	    }
     }};
 }
 
 #[test]
 fn test() {
-	let count = word_count_stderr!(0, "error");
-	assert_eq!(count, 1)
+	word_count_stderr!(0, "error", 2);
 }
 
 const TESTS: &[&'static str] = &[
