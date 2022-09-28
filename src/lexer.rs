@@ -95,6 +95,7 @@ pub enum TokenType {
 	Semicolon,
 	Dot,
 	Comma,
+	Arrow,
 
 	BinOp(BinOp),
 	Equals,
@@ -112,7 +113,7 @@ impl Display for TokenType {
 			TokenType::Struct => write!(f, "struct"),
 			TokenType::Ret => write!(f, "ret"),
 			TokenType::LBrace => write!(f, "'{{'"),
-			TokenType::RBrace => write!(f, "'}}"),
+			TokenType::RBrace => write!(f, "'}}'"),
 			TokenType::LParen => write!(f, "'('"),
 			TokenType::RParen => write!(f, "')'"),
 			TokenType::Colon => write!(f, "':'"),
@@ -125,7 +126,8 @@ impl Display for TokenType {
 			TokenType::Identifier(_) => write!(f, "an identifier"),
 			TokenType::Num(_) => write!(f, "a number"),
 			TokenType::CharLiteral(_) => write!(f, "a character literal"),
-			TokenType::StringLiteral(_) => write!(f, "a string literal")
+			TokenType::StringLiteral(_) => write!(f, "a string literal"),
+			TokenType::Arrow => write!(f, "'->'")
 		}
 	}
 }
@@ -148,8 +150,14 @@ pub struct Lexer<'source> {
 	special_chars: HashMap<char, TokenType>,
 	second_special_chars: HashSet<char>,
 	keywords: HashMap<&'static str, TokenType>,
-	next: Option<Token>,
-	emitter: &'source DiagnosticEmitter<'source>
+	next: [Option<Token>; 2],
+	emitter: &'source DiagnosticEmitter<'source>,
+	has_error: bool
+}
+
+pub enum PeekCount {
+	One,
+	Two
 }
 
 impl<'source> Lexer<'source> {
@@ -174,29 +182,51 @@ impl<'source> Lexer<'source> {
 			(':', TokenType::Colon)
 		]);
 		let second_special_chars = HashSet::from([
-			'='
+			'=', '>'
 		]);
 		let keywords = HashMap::from([
 			("struct", TokenType::Struct),
 			("ret", TokenType::Ret)
 		]);
 		Self {src: src.chars().peekable(), read: 0, special_chars, second_special_chars,
-		keywords, next: None, emitter}
+		keywords, next: [None, None], emitter, has_error: false}
 	}
 
-	pub fn peek(&mut self) -> Option<Token> {
-		if let Some(token) = &self.next {
-			return Some(token.clone())
+	pub fn peek(&mut self, count: PeekCount) -> Option<Token> {
+		match count {
+			PeekCount::One => {
+				if let Some(token) = &self.next[0] {
+					return Some(token.clone());
+				}
+				let token = self.next_internal();
+				self.next[0] = token;
+				self.next[0].clone()
+			},
+			PeekCount::Two => {
+				if let Some(token) = &self.next[1] {
+					return Some(token.clone());
+				}
+				if self.next[0].is_none() {
+					self.next[0] = self.next_internal();
+				}
+				let token = self.next_internal();
+				self.next[1] = token;
+				self.next[1].clone()
+			}
 		}
-		let token = self.next();
-		self.next = token;
-		self.next.clone()
 	}
 
 	pub fn next(&mut self) -> Option<Token> {
-		if let Some(token) = self.next.take() {
+		if let Some(token) = self.next[0].take() {
 			return Some(token);
 		}
+		if let Some(token) = self.next[1].take() {
+			return Some(token);
+		}
+		self.next_internal()
+	}
+
+	fn next_internal(&mut self) -> Option<Token> {
 		loop {
 			let start = self.read;
 
@@ -212,7 +242,12 @@ impl<'source> Lexer<'source> {
 				if let Some(second) = self.src.peek() {
 					if self.second_special_chars.contains(second) {
 						if let TokenType::BinOp(op) = token_type {
-							token_type = TokenType::BinOpEquals(op);
+							if *second == '=' {
+								token_type = TokenType::BinOpEquals(op);
+							}
+							else {
+								token_type = TokenType::Arrow;
+							}
 							text.push(*second);
 							self.src.next();
 							self.read += 1;
@@ -225,7 +260,6 @@ impl<'source> Lexer<'source> {
 			else if ['"', '\''].contains(&char) {
 				let start_char = char;
 				let mut text = String::new();
-				let mut invalid_escape = '\0';
 				while let Some(char) = self.src.next_if(|c| *c != start_char) {
 					if char == '\\' {
 						if let Some(next) = self.src.peek() {
@@ -234,7 +268,13 @@ impl<'source> Lexer<'source> {
 								't' => text.push('\t'),
 								'\\' => text.push('\\'),
 								'0' => text.push('\0'),
-								_ => invalid_escape = *next
+								e => {
+									self.emitter.error().with_label(
+										format!("invalid escape sequence {}", e))
+										.with_span(self.read..self.read+1)
+										.emit();
+									self.has_error = true;
+								}
 							}
 							self.src.next();
 							self.read += 1;
@@ -252,23 +292,18 @@ impl<'source> Lexer<'source> {
 				let token_type =
 					if is_char_literal { TokenType::CharLiteral } else { TokenType::StringLiteral };
 
-				if invalid_escape != '\0' {
-					self.emitter.error().with_label(
-						format!("invalid escape sequence {}", invalid_escape))
-						.with_span(start..self.read)
-						.emit();
-				}
-
 				if self.src.peek().is_none() {
 					if is_char_literal {
 						self.emitter.error().with_label(format!("unterminated char literal '{}'", text))
 							.with_span(start..self.read)
 							.emit();
+						self.has_error = true;
 					}
 					else {
 						self.emitter.error().with_label(format!("unterminated string literal '{}'", text))
 							.with_span(start..self.read)
 							.emit();
+						self.has_error = true;
 					}
 				}
 				else {
@@ -279,6 +314,7 @@ impl<'source> Lexer<'source> {
 					self.emitter.error().with_label(format!("invalid character literal '{}'", text))
 						.with_span(start..self.read)
 						.emit();
+					self.has_error = true;
 				}
 
 				return Some(Token::new(token_type(text), start..self.read));
@@ -309,5 +345,9 @@ impl<'source> Lexer<'source> {
 				return Some(Token::new(token_type, start..self.read));
 			}
 		}
+	}
+
+	pub fn has_error(&self) -> bool {
+		self.has_error
 	}
 }

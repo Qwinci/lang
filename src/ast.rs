@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use crate::diagnostics::Span;
 
 pub type Spanned<T> = (T, Span);
@@ -6,10 +5,10 @@ pub type Spanned<T> = (T, Span);
 #[derive(Debug, Clone)]
 pub enum Expr {
 	Error,
-	Var(String),
-	Num(u64),
-	CharLiteral(String),
-	StringLiteral(String),
+	Var(Spanned<String>),
+	Num(Spanned<u64>),
+	CharLiteral(Spanned<String>),
+	StringLiteral(Spanned<String>),
 
 	Neg(Box<Expr>),
 	Add(Box<Expr>, Box<Expr>),
@@ -20,7 +19,23 @@ pub enum Expr {
 	And(Box<Expr>, Box<Expr>),
 	Or(Box<Expr>, Box<Expr>),
 
+	Assign {
+		target: Box<Expr>,
+		value: Box<Expr>
+	},
+
 	Struct {
-		fields: HashMap<String, String>
+		fields: Vec<(Spanned<String>, Spanned<String>)>
+	},
+
+	Function {
+		args: Vec<(Spanned<String>, Spanned<String>)>,
+		ret_type: Spanned<String>,
+		body: Vec<Expr>
+	},
+
+	FunctionDecl {
+		args: Vec<(Spanned<String>, Spanned<String>)>,
+		ret_type: Spanned<String>
 	}
 }
