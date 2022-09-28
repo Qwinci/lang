@@ -120,11 +120,17 @@ pub fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
 	});
 
 	let decl = || {
-		let semicolon = just(Token::Semicolon)
+		let semicolon = just(Token::Semicolon).or_not()
 			.map(Ok)
 			.or_else(|e| Ok(Err(e)))
-			.validate(|out, _, emit| match out {
-				Ok(out) => out,
+			.validate(|out, span, emit| match out {
+				Ok(out) => match out {
+					Some(token) => token,
+					None => {
+						emit(Simple::custom(span, "jj"));
+						Token::Semicolon
+					}
+				},
 				Err(e) => {
 					emit(e);
 					Token::Semicolon

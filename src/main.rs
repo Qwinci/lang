@@ -9,8 +9,8 @@ mod ast;
 mod diagnostics;
 
 fn main() {
-	let src = read_to_string("../../tests/test2.lang").unwrap();
-	let map = lexer::SourceMap::new("tests/test2.lang", &src);
+	let src = read_to_string("test_src/test2.lang").unwrap();
+	let map = lexer::SourceMap::new("test_src/test2.lang", &src);
 	let emitter = DiagnosticEmitter::new(&map);
 	let lexer = Lexer::new(&src, &emitter);
 	let mut parser = Parser::new(lexer, &emitter);

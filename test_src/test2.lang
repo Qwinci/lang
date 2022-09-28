@@ -6,5 +6,5 @@ Hello = struct {
 test = () -> i32 {
 	test: Hello = Hello {.hello = 10};
 	test.hello = 10;
-	ret test.hello
+	ret test.hello;
 }

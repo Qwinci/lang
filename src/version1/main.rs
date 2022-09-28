@@ -21,7 +21,7 @@ fn main() {
 	let stream = Stream::from_iter(eoi_span, lex.spanned());
 
 	//let result = parser::parser().parse(stream);
-	let result = parser::parser().parse(stream);
+	let result = parser::parser().parse_recovery(stream);
 
 	println!("{:?}", result);
 }

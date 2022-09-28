@@ -25,29 +25,21 @@ pub enum Expr {
 	},
 
 	Struct {
+		name: Spanned<String>,
 		fields: Vec<(Spanned<String>, Spanned<String>)>
 	},
 
 	Function {
+		name: Spanned<String>,
 		args: Vec<(Spanned<String>, Spanned<String>)>,
 		ret_type: Spanned<String>,
-		body: Vec<Expr>
-	},
-
-	FunctionDecl {
-		args: Vec<(Spanned<String>, Spanned<String>)>,
-		ret_type: Spanned<String>
+		body: Option<Vec<Expr>>
 	},
 
 	VarDecl {
 		name: Spanned<String>,
-		r#type: Spanned<String>
-	},
-
-	VarDeclAssign {
-		name: Spanned<String>,
 		r#type: Spanned<String>,
-		value: Box<Expr>
+		value: Option<Box<Expr>>
 	},
 
 	Construct {
@@ -61,6 +53,6 @@ pub enum Expr {
 	},
 
 	Ret {
-		value: Box<Expr>
+		value: Option<Box<Expr>>
 	}
 }

@@ -322,9 +322,19 @@ impl<'source> Parser<'source> {
 		}
 	}
 
+	fn parse_ident_type(&mut self) -> Option<(Spanned<String>, Spanned<String>)> {
+		let name = self.parse_ident("an identifier")?;
+
+		self.expect(&[TokenType::Colon])?;
+
+		let r#type = self.parse_ident("a type")?;
+
+		Some((name, r#type))
+	}
+
 	fn parse_assign(&mut self, target: Expr) -> Expr {
 		// =
-		self.next();
+		let equals = self.next().unwrap();
 
 		let token = match self.peek_one() {
 			Some(token) => token,
@@ -338,7 +348,21 @@ impl<'source> Parser<'source> {
 			}
 		};
 
-		let value;
+		let mut name = (String::new(), 0..0);
+		if token.kind == TokenType::Struct || token.kind == TokenType::LParen {
+			name = match &target {
+				Expr::Var(ident) => ident.clone(),
+				_ => {
+					self.emitter.error()
+						.with_label("expected an identifier")
+						.with_span(equals.span)
+						.emit();
+					self.has_error = true;
+					(String::new(), 0..0)
+				}
+			};
+		}
+
 		if token.kind == TokenType::Struct {
 			self.next();
 
@@ -346,6 +370,9 @@ impl<'source> Parser<'source> {
 				let mut good = false;
 				if let Some(token) = self.peek_one() {
 					if token.kind == TokenType::RBrace {
+						good = true;
+					}
+					else if let TokenType::Identifier(_) = token.kind {
 						good = true;
 					}
 				}
@@ -371,43 +398,12 @@ impl<'source> Parser<'source> {
 					break;
 				}
 
-				let name = match self.parse_ident("an identifier") {
-					Some(ident) => ident,
-					None => {
-						return Expr::Assign {target: Box::new(target),
-							value: Box::new(Expr::Error)}
-					}
+				let name_type = match self.parse_ident_type() {
+					Some(name_type) => name_type,
+					None => return Expr::Error
 				};
 
-				if self.expect(&[TokenType::Colon]).is_none() {
-					if let Some(next) = self.peek_one() {
-						if let TokenType::Identifier(_) = next.kind {}
-						else {
-
-						}
-					}
-				}
-
-				let r#type = match self.parse_ident("a type") {
-					Some(ident) => ident,
-					None => {
-						if let Some(token) = self.peek_one() {
-							if token.kind != TokenType::Comma {
-								return Expr::Assign {target: Box::new(target),
-								value: Box::new(Expr::Error)}
-							}
-							else {
-								(String::new(), 0..0)
-							}
-						}
-						else {
-							return Expr::Assign {target: Box::new(target),
-								value: Box::new(Expr::Error)}
-						}
-					}
-				};
-
-				fields.push((name, r#type));
+				fields.push(name_type);
 
 				match self.expect(&[TokenType::Comma, TokenType::RBrace]) {
 					Some(token) => {
@@ -416,18 +412,12 @@ impl<'source> Parser<'source> {
 						}
 					}
 					None => {
-						if let Some(token) = self.peek_one() {
-							if let TokenType::Identifier(_) = token.kind {}
-							else {
-								return Expr::Assign {target: Box::new(target),
-									value: Box::new(Expr::Error)}
-							}
-						}
+						return Expr::Struct {name, fields};
 					}
 				}
 			}
 
-			value = Expr::Struct {fields};
+			return Expr::Struct {name, fields};
 		}
 		else if token.kind == TokenType::LParen {
 			self.next();
@@ -439,43 +429,12 @@ impl<'source> Parser<'source> {
 					break;
 				}
 
-				let name = match self.parse_ident("an identifier") {
-					Some(ident) => ident,
-					None => {
-						return Expr::Assign {target: Box::new(target),
-							value: Box::new(Expr::Error)}
-					}
+				let name_type = match self.parse_ident_type() {
+					Some(name_type) => name_type,
+					None => return Expr::Error
 				};
 
-				if self.expect(&[TokenType::Colon]).is_none() {
-					if let Some(next) = self.peek_one() {
-						if let TokenType::Identifier(_) = next.kind {}
-						else {
-
-						}
-					}
-				}
-
-				let r#type = match self.parse_ident("a type") {
-					Some(ident) => ident,
-					None => {
-						if let Some(token) = self.peek_one() {
-							if token.kind != TokenType::Comma {
-								return Expr::Assign {target: Box::new(target),
-									value: Box::new(Expr::Error)}
-							}
-							else {
-								(String::new(), 0..0)
-							}
-						}
-						else {
-							return Expr::Assign {target: Box::new(target),
-								value: Box::new(Expr::Error)}
-						}
-					}
-				};
-
-				args.push((name, r#type));
+				args.push(name_type);
 
 				match self.expect(&[TokenType::Comma, TokenType::RParen]) {
 					Some(token) => {
@@ -487,8 +446,7 @@ impl<'source> Parser<'source> {
 						if let Some(token) = self.peek_one() {
 							if let TokenType::Identifier(_) = token.kind {}
 							else {
-								return Expr::Assign {target: Box::new(target),
-									value: Box::new(Expr::Error)}
+								break;
 							}
 						}
 					}
@@ -527,17 +485,11 @@ impl<'source> Parser<'source> {
 			match s {
 				Some(s) => {
 					if s.kind == TokenType::Semicolon {
-						return Expr::Assign {target: Box::new(target), value: Box::new(Expr::FunctionDecl {
-							args,
-							ret_type
-						})};
+						return Expr::Function {name, args, ret_type, body: None};
 					}
 				}
 				None => {
-					return Expr::Assign {target: Box::new(target), value: Box::new(Expr::FunctionDecl {
-						args,
-						ret_type
-					})};
+					return Expr::Function {name, args, ret_type, body: None};
 				}
 			}
 
@@ -552,18 +504,14 @@ impl<'source> Parser<'source> {
 
 			self.expect(&[TokenType::RBrace]);
 
-			return Expr::Assign {target: Box::new(target), value: Box::new(Expr::Function {
-				args,
-				ret_type,
-				body
-			})};
+			return Expr::Function {name, args, ret_type, body: Some(body)};
 		}
 		else {
-			value = self.parse_expression();
+			let value = self.parse_expression();
 			self.expect(&[TokenType::Semicolon]);
+			Expr::Assign {target: Box::new(target), value: Box::new(value)}
 		}
 
-		Expr::Assign {target: Box::new(target), value: Box::new(value)}
 	}
 
 	fn parse_vardecl(&mut self, name: Spanned<String>) -> Expr {
@@ -581,14 +529,14 @@ impl<'source> Parser<'source> {
 			if s.kind == TokenType::Equals {
 				let value = self.parse_expression();
 				self.expect(&[TokenType::Semicolon]);
-				return Expr::VarDeclAssign {name, r#type, value: Box::new(value)};
+				Expr::VarDecl {name, r#type, value: Some(Box::new(value))}
 			}
 			else {
-				return Expr::VarDecl {name, r#type};
+				Expr::VarDecl {name, r#type, value: None}
 			}
 		}
 		else {
-			return Expr::VarDecl {name, r#type};
+			Expr::VarDecl {name, r#type, value: None}
 		}
 	}
 
@@ -600,9 +548,15 @@ impl<'source> Parser<'source> {
 					Some(token) => {
 						if token.kind == TokenType::Ret {
 							self.next();
+							if let Some(token) = self.peek_one() {
+								if token.kind == TokenType::Semicolon {
+									self.next();
+									return Expr::Ret {value: None};
+								}
+							}
 							let value = self.parse_expression();
 							self.expect(&[TokenType::Semicolon]);
-							return Expr::Ret {value: Box::new(value)};
+							return Expr::Ret {value: Some(Box::new(value))};
 						}
 
 						self.next();
