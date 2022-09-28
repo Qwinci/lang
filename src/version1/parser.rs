@@ -123,7 +123,7 @@ pub fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
 		let semicolon = just(Token::Semicolon)
 			.map(Ok)
 			.or_else(|e| Ok(Err(e)))
-			.validate(|out: Result<Token, Simple<Token>>, _, emit| match out {
+			.validate(|out, _, emit| match out {
 				Ok(out) => out,
 				Err(e) => {
 					emit(e);

@@ -155,7 +155,54 @@ impl<'source> Parser<'source> {
 			},
 			TokenType::Identifier(ident) => {
 				self.next();
-				Some(Expr::Var((ident, primary_token.span)))
+				if let Some(next) = self.peek_one() {
+					if next.kind == TokenType::LBrace {
+						self.next();
+
+						let mut fields = Vec::new();
+						while let Some(token) = self.peek_one() {
+							if token.kind == TokenType::RBrace {
+								break;
+							}
+
+							if self.expect(&[TokenType::Dot]).is_none() {
+								break;
+							}
+
+							let name = match self.parse_ident("a field name") {
+								Some(ident) => ident,
+								None => break
+							};
+
+							if self.expect(&[TokenType::Equals]).is_none() {
+								break;
+							}
+
+							let value = self.parse_expression();
+
+							fields.push((name, Box::new(value)));
+						}
+
+						self.expect(&[TokenType::RBrace]);
+
+						Some(Expr::Construct {name: (ident, primary_token.span), fields})
+					}
+					else if next.kind == TokenType::Dot {
+						self.next();
+						let name = match self.parse_ident("a field name") {
+							Some(ident) => ident,
+							None => return None
+						};
+
+						Some(Expr::FieldAccess {name: (ident, primary_token.span), field: name})
+					}
+					else {
+						Some(Expr::Var((ident, primary_token.span)))
+					}
+				}
+				else {
+					Some(Expr::Var((ident, primary_token.span)))
+				}
 			},
 			TokenType::CharLiteral(literal) => {
 				self.next();
@@ -519,12 +566,45 @@ impl<'source> Parser<'source> {
 		Expr::Assign {target: Box::new(target), value: Box::new(value)}
 	}
 
+	fn parse_vardecl(&mut self, name: Spanned<String>) -> Expr {
+		self.next();
+
+		let r#type = match self.parse_ident("a type") {
+			Some(ident) => ident,
+			None => {
+				return Expr::Error;
+			}
+		};
+
+		let s = self.expect(&[TokenType::Equals, TokenType::Semicolon]);
+		if let Some(s) = s {
+			if s.kind == TokenType::Equals {
+				let value = self.parse_expression();
+				self.expect(&[TokenType::Semicolon]);
+				return Expr::VarDeclAssign {name, r#type, value: Box::new(value)};
+			}
+			else {
+				return Expr::VarDecl {name, r#type};
+			}
+		}
+		else {
+			return Expr::VarDecl {name, r#type};
+		}
+	}
+
 	fn parse_expression(&mut self) -> Expr {
 		let primary = match self.parse_primary() {
 			Some(token) => token,
 			None => {
 				match self.peek_one() {
 					Some(token) => {
+						if token.kind == TokenType::Ret {
+							self.next();
+							let value = self.parse_expression();
+							self.expect(&[TokenType::Semicolon]);
+							return Expr::Ret {value: Box::new(value)};
+						}
+
 						self.next();
 						self.emitter.error()
 							.with_label(format!("expected a primary expression but got {}", token.kind))
@@ -560,7 +640,20 @@ impl<'source> Parser<'source> {
 		match token.kind {
 			TokenType::BinOp(_) => self.parse_binexp(primary, 0),
 			TokenType::Equals => self.parse_assign(primary),
-			kind => todo!("{}", kind)
+			TokenType::Colon => {
+				if let Expr::Var(var) = primary {
+					self.parse_vardecl(var)
+				}
+				else {
+					self.emitter.error()
+						.with_label("expected an identifier before ':'")
+						.with_span(token.span)
+						.emit();
+					self.has_error = true;
+					Expr::Error
+				}
+			},
+			_ => primary
 		}
 	}
 

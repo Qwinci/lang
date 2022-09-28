@@ -37,5 +37,30 @@ pub enum Expr {
 	FunctionDecl {
 		args: Vec<(Spanned<String>, Spanned<String>)>,
 		ret_type: Spanned<String>
+	},
+
+	VarDecl {
+		name: Spanned<String>,
+		r#type: Spanned<String>
+	},
+
+	VarDeclAssign {
+		name: Spanned<String>,
+		r#type: Spanned<String>,
+		value: Box<Expr>
+	},
+
+	Construct {
+		name: Spanned<String>,
+		fields: Vec<(Spanned<String>, Box<Expr>)>
+	},
+
+	FieldAccess {
+		name: Spanned<String>,
+		field: Spanned<String>
+	},
+
+	Ret {
+		value: Box<Expr>
 	}
 }
