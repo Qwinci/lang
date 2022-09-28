@@ -181,6 +181,24 @@ impl<'source> Parser<'source> {
 		}
 	}
 
+	fn parse_assign(&mut self, target: Expr) -> Expr {
+		// =
+		self.next();
+
+		let token = match self.peek() {
+			Some(token) => token,
+			None => {
+				self.emitter.error()
+					.with_label("expected an expression")
+					.with_eoi_span()
+					.emit();
+				Token::new(TokenType::Num(0), 0..0)
+			}
+		};
+
+		todo!("assign")
+	}
+
 	fn parse_expression(&mut self) -> Expr {
 		let primary = match self.parse_primary() {
 			Some(token) => token,
@@ -218,6 +236,7 @@ impl<'source> Parser<'source> {
 
 		match token.kind {
 			TokenType::BinOp(_) => self.parse_binexp(primary, 0),
+			TokenType::Equals => self.parse_assign(primary),
 			kind => todo!("{}", kind)
 		}
 	}
