@@ -6,7 +6,10 @@ pub type Spanned<T> = (T, Span);
 #[derive(Debug, Clone)]
 pub enum Expr {
 	Error,
+	Var(String),
 	Num(u64),
+	CharLiteral(String),
+	StringLiteral(String),
 
 	Neg(Box<Expr>),
 	Add(Box<Expr>, Box<Expr>),

@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::iter::Peekable;
 use std::str::Chars;
-use chumsky::chain::Chain;
 use logos::Source;
 use crate::diagnostics::{DiagnosticEmitter, Span};
 
@@ -85,8 +84,6 @@ pub enum BinOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenType {
-	None,
-
 	Struct,
 	Ret,
 
@@ -128,8 +125,7 @@ impl Display for TokenType {
 			TokenType::Identifier(_) => write!(f, "an identifier"),
 			TokenType::Num(_) => write!(f, "a number"),
 			TokenType::CharLiteral(_) => write!(f, "a character literal"),
-			TokenType::StringLiteral(_) => write!(f, "a string literal"),
-			TokenType::None => write!(f, "none")
+			TokenType::StringLiteral(_) => write!(f, "a string literal")
 		}
 	}
 }

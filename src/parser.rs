@@ -142,10 +142,22 @@ impl<'source> Parser<'source> {
 						.fold(Expr::Num(num), |e, _| Expr::Neg(Box::new(e)))
 				)
 			},
+			TokenType::Identifier(ident) => {
+				self.next();
+				Some(Expr::Var(ident))
+			},
+			TokenType::CharLiteral(literal) => {
+				self.next();
+				Some(Expr::CharLiteral(literal))
+			},
+			TokenType::StringLiteral(literal) => {
+				self.next();
+				Some(Expr::StringLiteral(literal))
+			}
 			TokenType::LParen => {
 				self.next();
-				let expr = self.parse()?;
-				let next = self.peek(); // todo check for )
+				let expr = self.parse_expression();
+				let next = self.peek();
 				if let Some(next) = next {
 					if next.kind != TokenType::RParen {
 						self.emitter.error()
@@ -169,9 +181,61 @@ impl<'source> Parser<'source> {
 		}
 	}
 
-	pub fn parse(&mut self) -> Option<Expr> {
-		let primary = self.parse_primary()?;
-		let a = self.parse_binexp(primary, 0);
-		Some(a)
+	fn parse_expression(&mut self) -> Expr {
+		let primary = match self.parse_primary() {
+			Some(token) => token,
+			None => {
+				match self.peek() {
+					Some(token) => {
+						self.next();
+						self.emitter.error()
+							.with_label(format!("expected a primary expression but got {}", token.kind))
+							.with_span(token.span)
+							.emit();
+						return Expr::Error;
+					}
+					None => {
+						self.emitter.error()
+							.with_label("expected a primary expressiob but found eof")
+							.with_eoi_span()
+							.emit();
+						return Expr::Error;
+					}
+				}
+			}
+		};
+
+		let token = match self.peek() {
+			Some(token) => token,
+			None => {
+				self.emitter.error()
+					.with_label("expected an expression but found eof")
+					.with_eoi_span()
+					.emit();
+				return Expr::Error;
+			}
+		};
+
+		match token.kind {
+			TokenType::BinOp(_) => self.parse_binexp(primary, 0),
+			kind => todo!("{}", kind)
+		}
+	}
+
+	fn has_eof(&mut self) -> bool {
+		self.lexer.peek().is_none()
+	}
+
+	fn parse_toplevel_decl(&mut self) -> Expr {
+		self.parse_expression()
+	}
+
+	pub fn parse(&mut self) -> Vec<Expr> {
+		let mut ast = Vec::new();
+		while !self.has_eof() {
+			ast.push(self.parse_toplevel_decl());
+		}
+
+		ast
 	}
 }
