@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
+use std::io::Write;
 use std::iter::Peekable;
 use std::str::Chars;
 use logos::Source;
@@ -144,14 +145,14 @@ impl Token {
 	}
 }
 
-pub struct Lexer<'source> {
+pub struct Lexer<'source, W: Write> {
 	src: Peekable<Chars<'source>>,
 	read: usize,
 	special_chars: HashMap<char, TokenType>,
 	second_special_chars: HashSet<char>,
 	keywords: HashMap<&'static str, TokenType>,
 	next: [Option<Token>; 2],
-	emitter: &'source DiagnosticEmitter<'source>,
+	emitter: &'source DiagnosticEmitter<'source, W>,
 	has_error: bool
 }
 
@@ -160,8 +161,8 @@ pub enum PeekCount {
 	Two
 }
 
-impl<'source> Lexer<'source> {
-	pub fn new(src: &'source str, emitter: &'source DiagnosticEmitter<'source>) -> Self {
+impl<'source, W: Write> Lexer<'source, W> {
+	pub fn new(src: &'source str, emitter: &'source DiagnosticEmitter<'source, W>) -> Self {
 		let special_chars = HashMap::from([
 			('+', TokenType::BinOp(BinOp::Add)),
 			('-', TokenType::BinOp(BinOp::Minus)),
@@ -218,6 +219,7 @@ impl<'source> Lexer<'source> {
 
 	pub fn next(&mut self) -> Option<Token> {
 		if let Some(token) = self.next[0].take() {
+			self.next[0] = self.next[1].take();
 			return Some(token);
 		}
 		if let Some(token) = self.next[1].take() {

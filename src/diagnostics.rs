@@ -1,12 +1,14 @@
+#![allow(unused)]
+
+use std::cell::RefCell;
 use std::fmt::Display;
+use std::io;
+use std::io::Write;
 use std::ops::Range;
+use std::rc::Rc;
 use crate::lexer::SourceMap;
 
 pub type Span = Range<usize>;
-
-pub struct DiagnosticEmitter<'a> {
-	map: &'a SourceMap<'a>
-}
 
 #[macro_export]
 macro_rules! colored {
@@ -39,16 +41,17 @@ pub enum EmitType {
 	Error
 }
 
-pub struct Emit<'source> {
+pub struct Emit<'source, W: Write> {
 	label: String,
 	span: Span,
 	emit_type: EmitType,
-	map: &'source SourceMap<'source>
+	map: &'source SourceMap<'source>,
+	writer: Rc<RefCell<W>>
 }
 
-impl<'source> Emit<'source> {
-	fn new(map: &'source SourceMap<'source>) -> Self {
-		Self {label: String::new(), span: 0..0, emit_type: EmitType::Info, map}
+impl<'source, W: Write> Emit<'source, W> {
+	fn new(map: &'source SourceMap<'source>, writer: Rc<RefCell<W>>) -> Self {
+		Self {label: String::new(), span: 0..0, emit_type: EmitType::Info, map, writer}
 	}
 
 	pub fn with_label<T: Display>(mut self, label: T) -> Self {
@@ -74,38 +77,61 @@ impl<'source> Emit<'source> {
 	pub fn emit(self) {
 		match self.emit_type {
 			EmitType::Info => {
-				eprintln!("{}info: {}{}", color::GREEN, color::RESET, self.label);
-				eprintln!("  {}--> {}{}{}", color::CYAN, color::BLUE,
-				self.map.span_to_loc(self.span), color::RESET);
+				writeln!(self.writer.clone().borrow_mut(),
+				         "{}info: {}{}", color::GREEN, color::RESET,
+				         self.label).unwrap();
+				writeln!(self.writer.clone().borrow_mut(),
+				         "  {}--> {}{}{}", color::CYAN, color::BLUE,
+				         self.map.span_to_loc(self.span), color::RESET).unwrap();
 			},
 			EmitType::Warning => {
-				eprintln!("{}warning: {}{}", color::YELLOW, color::RESET, self.label);
-				eprintln!("  {}--> {}{}{}", color::CYAN, color::BLUE,
-				          self.map.span_to_loc(self.span), color::RESET);
+				writeln!(self.writer.clone().borrow_mut(),
+				         "{}warning: {}{}", color::YELLOW, color::RESET,
+				         self.label).unwrap();
+				writeln!(self.writer.clone().borrow_mut(),
+				         "  {}--> {}{}{}", color::CYAN, color::BLUE,
+				          self.map.span_to_loc(self.span), color::RESET).unwrap();
 			}
 			EmitType::Error => {
-				eprintln!("{}error: {}{}", color::RED, color::RESET, self.label);
-				eprintln!("  {}--> {}{}{}", color::CYAN, color::BLUE,
-				          self.map.span_to_loc(self.span), color::RESET);
+				writeln!(self.writer.clone().borrow_mut(),
+				         "{}error: {}{}", color::RED, color::RESET,
+				         self.label).unwrap();
+				writeln!(self.writer.clone().borrow_mut(),
+				         "  {}--> {}{}{}", color::CYAN, color::BLUE,
+				          self.map.span_to_loc(self.span), color::RESET).unwrap();
 			}
 		}
 	}
 }
 
-impl<'a> DiagnosticEmitter<'a> {
-	pub fn new(map: &'a SourceMap<'a>) -> Self {
-		Self {map}
+pub struct DiagnosticEmitter<'a, W: Write> {
+	map: &'a SourceMap<'a>,
+	writer: RefCell<Rc<RefCell<W>>>
+}
+
+impl<'a, W: Write> DiagnosticEmitter<'a, W> {
+	pub fn new(map: &'a SourceMap<'a>, writer: W) -> Self {
+		Self {map, writer: RefCell::new(Rc::new(RefCell::new(writer)))}
 	}
 
-	pub fn info(&self) -> Emit {
-		Emit::new(self.map).with_type(EmitType::Info)
+	pub fn info(&self) -> Emit<W> {
+		Emit::new(self.map, self.writer.borrow_mut().clone()).with_type(EmitType::Info)
 	}
 
-	pub fn warning(&self) -> Emit {
-		Emit::new(self.map).with_type(EmitType::Warning)
+	pub fn warning(&self) -> Emit<W> {
+		Emit::new(self.map, self.writer.borrow_mut().clone()).with_type(EmitType::Warning)
 	}
 
-	pub fn error(&self) -> Emit {
-		Emit::new(self.map).with_type(EmitType::Error)
+	pub fn error(&self) -> Emit<W> {
+		Emit::new(self.map, self.writer.borrow_mut().clone()).with_type(EmitType::Error)
 	}
+}
+
+pub fn with_stderr<'a>(map: &'a SourceMap<'a>) -> DiagnosticEmitter<'a, io::Stderr> {
+	DiagnosticEmitter::new(map, io::stderr())
+}
+
+pub fn with_string<'a>(map: &'a SourceMap<'a>, string: &'a mut String)
+	-> DiagnosticEmitter<'a, &'a mut Vec<u8>> {
+	DiagnosticEmitter::new(map, unsafe { string.as_mut_vec() })
 }
