@@ -392,9 +392,11 @@ impl<'source> Parser<'source> {
 			}
 
 			let mut fields = Vec::new();
+			let mut is_good = false;
 			while let Some(token) = self.peek_one() {
 				if token.kind == TokenType::RBrace {
 					self.next();
+					is_good = true;
 					break;
 				}
 
@@ -408,6 +410,7 @@ impl<'source> Parser<'source> {
 				match self.expect(&[TokenType::Comma, TokenType::RBrace]) {
 					Some(token) => {
 						if token.kind == TokenType::RBrace {
+							is_good = true;
 							break;
 						}
 					}
@@ -415,6 +418,14 @@ impl<'source> Parser<'source> {
 						return Expr::Struct {name, fields};
 					}
 				}
+			}
+
+			if !is_good {
+				self.emitter.error()
+					.with_label("expected '}' but found eof")
+					.with_eoi_span()
+					.emit();
+				self.has_error = true;
 			}
 
 			return Expr::Struct {name, fields};

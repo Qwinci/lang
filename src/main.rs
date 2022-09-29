@@ -1,5 +1,6 @@
-use std::env::{args, current_exe};
+use std::env::args;
 use std::fs::read_to_string;
+#[cfg(test)]
 use std::process::Command;
 use crate::diagnostics::DiagnosticEmitter;
 use crate::lexer::{Lexer, SourceMap, Token};
@@ -10,6 +11,7 @@ mod parser;
 mod ast;
 mod diagnostics;
 
+#[cfg(test)]
 macro_rules! word_count_stderr {
     ($test_num:expr, $word:expr, $count:expr) => {{
 	    let output = Command::new("target/debug/lang")
@@ -26,11 +28,15 @@ macro_rules! word_count_stderr {
 #[test]
 fn test() {
 	word_count_stderr!(0, "error", 2);
+	word_count_stderr!(1, "error", 1);
+	word_count_stderr!(2, "error", 1);
 }
 
 const TESTS: &[&'static str] = &[
 	r"struct {
-	"
+	",
+	r"Test = struct",
+	r"Test = struct {"
 ];
 
 fn main() {
@@ -50,7 +56,7 @@ fn main() {
 	}
 
 	if test {
-		let test_num_str = test_num.to_string();
+		let test_num_str = "test".to_string() + test_num.to_string().as_str();
 		let map = SourceMap::new(test_num_str.as_str(), TESTS[test_num]);
 		let emitter = DiagnosticEmitter::new(&map);
 		let lexer = Lexer::new(TESTS[test_num], &emitter);
