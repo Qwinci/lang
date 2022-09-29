@@ -30,13 +30,16 @@ fn test() {
 	word_count_stderr!(0, "error", 2);
 	word_count_stderr!(1, "error", 1);
 	word_count_stderr!(2, "error", 1);
+	word_count_stderr!(3, "error", 1);
+	word_count_stderr!(4, "error", 1);
 }
 
 const TESTS: &[&'static str] = &[
-	r"struct {
-	",
+	r"struct {",
 	r"Test = struct",
-	r"Test = struct {"
+	r"Test = struct {",
+	r"Test = struct }",
+	r"Test = struct { test = struct {}"
 ];
 
 fn main() {
