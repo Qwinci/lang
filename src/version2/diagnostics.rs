@@ -106,24 +106,24 @@ impl<'source, W: Write> Emit<'source, W> {
 
 pub struct DiagnosticEmitter<'a, W: Write> {
 	map: &'a SourceMap<'a>,
-	writer: RefCell<Rc<RefCell<W>>>
+	writer: Rc<RefCell<W>>
 }
 
 impl<'a, W: Write> DiagnosticEmitter<'a, W> {
 	pub fn new(map: &'a SourceMap<'a>, writer: W) -> Self {
-		Self {map, writer: RefCell::new(Rc::new(RefCell::new(writer)))}
+		Self {map, writer: Rc::new(RefCell::new(writer))}
 	}
 
 	pub fn info(&self) -> Emit<W> {
-		Emit::new(self.map, self.writer.borrow_mut().clone()).with_type(EmitType::Info)
+		Emit::new(self.map, self.writer.clone()).with_type(EmitType::Info)
 	}
 
 	pub fn warning(&self) -> Emit<W> {
-		Emit::new(self.map, self.writer.borrow_mut().clone()).with_type(EmitType::Warning)
+		Emit::new(self.map, self.writer.clone()).with_type(EmitType::Warning)
 	}
 
 	pub fn error(&self) -> Emit<W> {
-		Emit::new(self.map, self.writer.borrow_mut().clone()).with_type(EmitType::Error)
+		Emit::new(self.map, self.writer.clone()).with_type(EmitType::Error)
 	}
 }
 

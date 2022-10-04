@@ -1,775 +1,246 @@
-use std::io::Write;
-use crate::{DiagnosticEmitter, Lexer, Token};
-use crate::ast::{Expr, Spanned};
-use crate::diagnostics::Span;
-use crate::lexer::{BinOp, PeekCount, TokenType};
-
-pub struct Parser<'source, W: Write> {
-	lexer: Lexer<'source, W>,
-	emitter: &'source DiagnosticEmitter<'source, W>,
-	has_error: bool
-}
+use std::collections::HashMap;
+use chumsky::prelude::*;
+use crate::Token;
 
 #[derive(Debug)]
-enum Recovery {
-	Continue(Span),
-	Break(Span),
-	TopLevel(Span),
-	Eof
+pub enum Expr {
+	Var(String),
+
+	Num(u64),
+
+	Struct {
+		fields: HashMap<String, String>
+	},
+
+	Function {
+		name: String,
+		args: Vec<(String, String)>,
+		ret_type: Option<String>,
+		body: Vec<Expr>
+	},
+
+	Assign {
+		target: Box<Expr>,
+		value: Box<Expr>
+	},
+
+	VarDecl {
+		name: String,
+		r#type: String,
+		value: Option<Box<Expr>>
+	},
+
+	Construct {
+		r#type: String,
+		fields: HashMap<String, Box<Expr>>
+	},
+
+	Call {
+		name: String,
+		args: Vec<Expr>
+	},
+
+	FieldAccess {
+		var_name: String,
+		name: String
+	},
+
+	Ret(Box<Expr>),
+
+	Neg(Box<Expr>),
+	Add(Box<Expr>, Box<Expr>),
+	Sub(Box<Expr>, Box<Expr>),
+	Mul(Box<Expr>, Box<Expr>),
+	Div(Box<Expr>, Box<Expr>),
+	Mod(Box<Expr>, Box<Expr>)
 }
 
-impl<'source, W: Write> Parser<'source, W> {
-	pub fn new(lexer: Lexer<'source, W>,
-	           emitter: &'source DiagnosticEmitter<'source, W>) -> Self {
-		Self {lexer, emitter, has_error: false}
+pub fn parser() -> impl Parser<Token, Vec<Expr>, Error = Simple<Token>> {
+	let field_access = ident()
+		.then_ignore(just(Token::Dot))
+		.then(ident())
+		.map(|(var_name, name)| Expr::FieldAccess {
+			var_name,
+			name
+		});
+
+	let expr: Recursive<Token, Expr, Simple<Token>> = recursive(|expr| {
+		let int = num().map(|value| Expr::Num(value));
+
+		let construct = ident()
+			.then_ignore(just(Token::LBrace))
+			.then(just(Token::Dot).ignore_then(ident())
+				.then_ignore(just(Token::Equals))
+				.then(expr.clone()).separated_by(just(Token::Comma)))
+			.then_ignore(token_or_recover(Token::RBrace, "'}'"))
+			.map(|(r#type, fields)| Expr::Construct {
+				r#type,
+				fields: fields.into_iter().map(|(name, expr)| (name, Box::new(expr))).collect()
+			});
+
+		let call = ident()
+			.then(expr.clone()
+				.separated_by(just(Token::Comma))
+				.delimited_by(just(Token::LParen), just(Token::RParen)))
+			.map(|(name, args)| Expr::Call {
+				name,
+				args
+			});
+
+		let atom = int
+			.or(expr.clone().delimited_by(just(Token::LParen), just(Token::RParen)))
+			.or(construct)
+			.or(call)
+			.or(field_access.clone())
+			.or(ident().map(Expr::Var));
+
+
+		// 1 + 2 * 2
+		let unary = just(Token::Minus)
+			.repeated()
+			.then(atom)
+			.foldr(|_op, rhs| Expr::Neg(Box::new(rhs)));
+
+		let product = unary.clone()
+			.then(just(Token::Multiply).to(Expr::Mul as fn(_, _) -> _)
+				.or(just(Token::Divide).to(Expr::Div as fn(_, _) -> _))
+				.or(just(Token::Modulo).to(Expr::Mod as fn(_, _) -> _))
+				.then(unary)
+				.repeated())
+			.foldl(|lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)));
+
+		let sum = product.clone()
+			.then(just(Token::Plus).to(Expr::Add as fn(_, _) -> _)
+				.or(just(Token::Minus).to(Expr::Sub as fn(_, _) -> _))
+				.then(product)
+				.repeated())
+			.foldl(|lhs, (op, rhs)| op(Box::new(lhs), Box::new(rhs)));
+
+		sum
+	});
+
+	let decl = || {
+		let semicolon = token_or_recover(Token::Semicolon, "semicolon");
+
+		let ret = just(Token::Ret)
+			.ignore_then(expr.clone()).then_ignore(semicolon.clone())
+			.map(|expr| Expr::Ret(Box::new(expr)));
+
+		let keyword = ret;
+
+		let assign_var = ident()
+			.then_ignore(just(Token::Equals))
+			.then(expr.clone())
+			.then_ignore(semicolon.clone())
+			.map(|(name, value)| Expr::Assign {
+				target: Box::new(Expr::Var(name)),
+				value: Box::new(value)
+			});
+
+		let name_type = ident()
+			.then_ignore(just(Token::Colon))
+			.then(ident());
+
+		let decl_var = name_type.clone()
+			.then_ignore(semicolon.clone())
+			.map(|(name, r#type)| Expr::VarDecl {
+				name,
+				r#type,
+				value: None
+			});
+
+		let var_decl_assign = name_type
+			.then_ignore(just(Token::Equals))
+			.then(expr.clone())
+			.then_ignore(semicolon.clone())
+			.map(|((name, r#type), value)| Expr::VarDecl {
+				name,
+				r#type,
+				value: Some(Box::new(value))
+			});
+
+		let field_assign = field_access.clone()
+			.then_ignore(just(Token::Equals))
+			.then(expr.clone())
+			.then_ignore(semicolon.clone())
+			.map(|(field, value)| Expr::Assign {
+				target: Box::new(field),
+				value: Box::new(value)
+			});
+
+		let assign_struct = ident()
+			.then_ignore(just(Token::Equals))
+			.then(r#struct())
+			.map(|(name, content)| Expr::Assign {
+				target: Box::new(Expr::Var(name)),
+				value: Box::new(content)
+			});
+
+		let block = just(Token::LBrace).ignore_then(
+			choice((assign_var.clone(),
+			     var_decl_assign.clone(),
+				 decl_var.clone(),
+				 keyword.clone(),
+				 field_assign.clone())).repeated()
+				.then_ignore(just(Token::RBrace))
+		);
+
+		let args = just(Token::Arrow)
+			.ignore_then(ident());
+
+		let assign_fn = ident()
+			.then_ignore(just(Token::Equals))
+			.then_ignore(just(Token::LParen))
+			.then(ident().then_ignore(just(Token::Colon)).then(ident())
+				.separated_by(just(Token::Comma)))
+			.then_ignore(just(Token::RParen))
+			.then(args.or_not())
+			.then(block.clone())
+			.map(|(((name, args), ret_type), body)| Expr::Function {
+				name,
+				args,
+				ret_type,
+				body
+			});
+
+		choice((assign_struct, assign_fn))
+	};
+
+	decl().repeated().then_ignore(end())
+}
+
+fn r#struct() -> impl Parser<Token, Expr, Error = Simple<Token>> + Clone {
+	let start =
+		just(Token::Struct).ignore_then(just(Token::LBrace));
+
+	let field = ident().then_ignore(just(Token::Colon)).then(ident());
+
+	start.ignore_then(field.separated_by(just(Token::Comma)).allow_trailing())
+		.then_ignore(just(Token::RBrace))
+		.map(|fields| Expr::Struct { fields: fields.into_iter().collect() })
+}
+
+fn ident() -> impl Parser<Token, String, Error = Simple<Token>> + Clone {
+	select! {
+		Token::Identifier(text) => text
 	}
+}
 
-	fn next(&mut self) -> Option<Token> {
-		let token = self.lexer.next();
-		self.has_error |= self.lexer.has_error();
-		token
+fn num() -> impl Parser<Token, u64, Error = Simple<Token>> + Clone {
+	select! {
+		Token::Number(num) => num
 	}
+}
 
-	fn peek(&mut self, count: PeekCount) -> Option<Token> {
-		let token = self.lexer.peek(count);
-		self.has_error |= self.lexer.has_error();
-		token
-	}
-
-	fn peek_one(&mut self) -> Option<Token> {
-		self.peek(PeekCount::One)
-	}
-
-	fn get_prec(token: &Token) -> Option<u32> {
-		match &token.kind {
-			TokenType::BinOp(op) => match op {
-				BinOp::Add | BinOp::Minus => Some(10),
-				BinOp::Multiply | BinOp::Divide | BinOp::Modulo => Some(20),
-				BinOp::And | BinOp::Or => Some(5),
-				BinOp::Not => None
-			}
-			_ => None
-		}
-	}
-
-	fn parse_binexp(&mut self, mut lhs: Expr, min_precedence: u32) -> Expr {
-		let mut next = self.peek_one();
-		while let Some(token) = next {
-			let op_prec;
-			if let Some(prec) = Self::get_prec(&token) {
-				if prec < min_precedence {
-					break;
-				}
-				op_prec = prec;
-			}
-			else {
-				break;
-			}
-
-			let op = self.next().unwrap();
-
-			let mut rhs = match self.parse_primary() {
-				Some(primary) => primary,
-				None => {
-					let op_len = op.span.end - op.span.start;
-					self.emitter.error()
-						.with_label(format!("expected a primary expression after {}", op.kind))
-						.with_span(op.span.start+op_len..op.span.end+op_len)
-						.emit();
-					self.has_error = true;
-					Expr::Error
-				}
-			};
-
-			next = self.peek_one();
-
-			while let Some(token) = &next {
-				if let Some(prec) = Self::get_prec(&token) {
-					if prec <= op_prec {
-						break;
-					}
-				}
-				else {
-					break;
-				}
-
-				let is_greater = match &next {
-					Some(token) => {
-						if let Some(prec) = Self::get_prec(token) {
-							if prec > op_prec {
-								1
-							}
-							else {
-								0
-							}
-						}
-						else {
-							0
-						}
-					}
-					None => 0
-				};
-				rhs = self.parse_binexp(rhs, op_prec + is_greater);
-				next = self.peek_one();
-			}
-
-			let op = match op.kind {
-				TokenType::BinOp(op) => {
-					match op {
-						BinOp::Add => Expr::Add,
-						BinOp::Minus => Expr::Sub,
-						BinOp::Multiply => Expr::Mul,
-						BinOp::Divide => Expr::Div,
-						BinOp::Modulo => Expr::Mod,
-						BinOp::And => Expr::And,
-						BinOp::Or => Expr::Or,
-						_ => unreachable!()
-					}
-				}
-				_ => unreachable!()
-			};
-
-			lhs = op(Box::new(lhs), Box::new(rhs));
-		}
-
-		return lhs;
-	}
-
-	fn parse_primary(&mut self) -> Option<Expr> {
-		let mut minus_stack = Vec::new();
-		while let Some(token) = self.peek_one() {
-			if let TokenType::BinOp(op) = token.kind {
-				if op == BinOp::Minus {
-					minus_stack.push(BinOp::Minus);
-					self.next();
-				}
-				else {
-					break;
-				}
-			}
-			else {
-				break
-			}
-		}
-
-		let primary_token = self.peek_one()?;
-
-		match primary_token.kind {
-			TokenType::Num(num) => {
-				self.next();
-				Some(
-					minus_stack.into_iter()
-						.fold(Expr::Num((num, primary_token.span)),
-						      |e, _| Expr::Neg(Box::new(e)))
-				)
+fn token_or_recover(token: Token, label: &'static str) -> impl Parser<Token, Token, Error = Simple<Token>> + Clone {
+	just(token.clone())
+		.map(Ok)
+		.or_else(|e| Ok(Err(e)))
+		.validate(move |out, _, emit| match out {
+			Ok(out) => out,
+			Err(e) => {
+				emit(e);
+				token.clone()
 			},
-			TokenType::Identifier(ident) => {
-				self.next();
-				if let Some(next) = self.peek_one() {
-					if next.kind == TokenType::LBrace {
-						self.next();
-
-						let mut fields = Vec::new();
-						while let Some(token) = self.peek_one() {
-							if token.kind == TokenType::RBrace {
-								break;
-							}
-
-							if self.expect(&[TokenType::Dot]).is_none() {
-								break;
-							}
-
-							let name = match self.parse_ident("a field name") {
-								Some(ident) => ident,
-								None => break
-							};
-
-							if self.expect(&[TokenType::Equals]).is_none() {
-								break;
-							}
-
-							let value = self.parse_atom();
-
-							fields.push((name, Box::new(value)));
-						}
-
-						self.expect(&[TokenType::RBrace]);
-
-						Some(Expr::Construct {name: (ident, primary_token.span), fields})
-					}
-					else if next.kind == TokenType::Dot {
-						self.next();
-						let name = match self.parse_ident("a field name") {
-							Some(ident) => ident,
-							None => return None
-						};
-
-						Some(Expr::FieldAccess {name: (ident, primary_token.span), field: name})
-					}
-					else {
-						Some(Expr::Var((ident, primary_token.span)))
-					}
-				}
-				else {
-					Some(Expr::Var((ident, primary_token.span)))
-				}
-			},
-			TokenType::CharLiteral(literal) => {
-				self.next();
-				Some(Expr::CharLiteral((literal, primary_token.span)))
-			},
-			TokenType::StringLiteral(literal) => {
-				self.next();
-				Some(Expr::StringLiteral((literal, primary_token.span)))
-			}
-			TokenType::LParen => {
-				self.next();
-				let expr = self.parse_atom();
-				let next = self.peek_one();
-				if let Some(next) = next {
-					if next.kind != TokenType::RParen {
-						self.emitter.error()
-							.with_label(format!("expected ')' but got {}", next.kind))
-							.with_span(next.span)
-							.emit();
-						self.has_error = true;
-					}
-					else {
-						self.next();
-					}
-				}
-				else {
-					self.emitter.error()
-						.with_label("expected ')'")
-						.with_eoi_span()
-						.emit();
-					self.has_error = true;
-				}
-				Some(expr)
-			}
-			_ => None
-		}
-	}
-
-	fn expect(&mut self, expected: &[TokenType]) -> Option<Token> {
-		let label = move || {
-			let mut label = "expected ".to_string();
-			let len = expected.len();
-			if len == 1 {
-				label += expected[0].to_string().as_str();
-				return label;
-			}
-			else if len == 2 {
-				label += (expected[0].to_string() + " or " + expected[1].to_string().as_str()).as_str();
-				return label;
-			}
-			for (i, e) in expected.into_iter().enumerate() {
-				if i < len.saturating_sub(1) {
-					label += format!("{}", e).as_str();
-				}
-				else {
-					label += format!(" or {}", e).as_str();
-				}
-
-				if i < len.saturating_sub(2) {
-					label += ", ";
-				}
-			}
-			label
-		};
-		match self.peek_one() {
-			Some(token) => {
-				if expected.contains(&token.kind) {
-					self.next();
-					Some(token)
-				}
-				else {
-					let label = label() + format!(" but got {}", token.kind).as_str();
-					self.emitter.error()
-						.with_label(label)
-						.with_span(token.span)
-						.emit();
-					self.has_error = true;
-					None
-				}
-			}
-			None => {
-				let label = label() + " but found eof";
-				self.emitter.error()
-					.with_label(label)
-					.with_eoi_span()
-					.emit();
-				self.has_error = true;
-				None
-			}
-		}
-	}
-
-	fn parse_ident(&mut self, name: &str) -> Option<Spanned<String>> {
-		match self.peek_one() {
-			Some(token) => match token.kind {
-				TokenType::Identifier(ident) => {
-					self.next();
-					Some((ident, token.span))
-				},
-				_ => {
-					self.emitter.error()
-						.with_label(format!("expected {} but got {}", name, token.kind))
-						.with_span(token.span)
-						.emit();
-					self.has_error = true;
-					None
-				}
-			}
-			None => {
-				self.emitter.error()
-					.with_label("expected an identifier but found eof")
-					.with_eoi_span()
-					.emit();
-				self.has_error = true;
-				None
-			}
-		}
-	}
-
-	fn parse_ident_type(&mut self) -> Option<(Spanned<String>, Spanned<String>)> {
-		let name = self.parse_ident("an identifier")?;
-
-		self.expect(&[TokenType::Colon])?;
-
-		let r#type = self.parse_ident("a type")?;
-
-		Some((name, r#type))
-	}
-
-	fn skip_until(&mut self, until: &[(TokenType, usize)]) {
-		while let Some(token) = self.peek_one() {
-			if let Some(next) = self.peek(PeekCount::Two) {
-				for (t, amount) in until.iter() {
-					if *amount == 2 && next.kind == *t {
-						return;
-					}
-				}
-			}
-			for (t, amount) in until.iter() {
-				if token.kind == *t {
-					if *amount == 0 {
-						self.next();
-						return;
-					}
-					else if *amount == 1 {
-						return;
-					}
-				}
-			}
-
-			self.next();
-		}
-	}
-
-	fn recover(&mut self, next_elem_mark: Option<TokenType>, clause_end_mark: Option<TokenType>) -> Recovery {
-		while let Some(token) = self.peek_one() {
-			if let Some(next_elem_mark) = next_elem_mark.clone() {
-				if token.kind == next_elem_mark {
-					return Recovery::Continue(token.span);
-				}
-			}
-			if let Some(clause_end_mark) = clause_end_mark.clone() {
-				if token.kind == clause_end_mark {
-					return Recovery::Break(token.span);
-				}
-			}
-
-			self.next();
-		}
-
-		Recovery::Eof
-	}
-
-	fn parse_assign(&mut self, target: Expr) -> Expr {
-		// =
-		let equals = self.next().unwrap();
-
-		let token = match self.peek_one() {
-			Some(token) => token,
-			None => {
-				self.emitter.error()
-					.with_label("expected an expression")
-					.with_eoi_span()
-					.emit();
-				self.has_error = true;
-				Token::new(TokenType::Num(0), 0..0)
-			}
-		};
-
-		let mut name = (String::new(), 0..0);
-		if token.kind == TokenType::Struct || token.kind == TokenType::LParen {
-			name = match &target {
-				Expr::Var(ident) => ident.clone(),
-				_ => {
-					self.emitter.error()
-						.with_label("expected an identifier")
-						.with_span(equals.span)
-						.emit();
-					self.has_error = true;
-					(String::new(), 0..0)
-				}
-			};
-		}
-
-		if token.kind == TokenType::Struct {
-			self.next();
-
-			if self.expect(&[TokenType::LBrace]).is_none() {
-				let mut good = false;
-				if let Some(token) = self.peek_one() {
-					if token.kind == TokenType::RBrace {
-						good = true;
-					}
-					else if let TokenType::Identifier(_) = token.kind {
-						good = true;
-					}
-				}
-
-				if !good {
-					match self.peek(PeekCount::Two) {
-						Some(token) => {
-							if token.kind != TokenType::Colon {
-								return Expr::Error;
-							}
-						}
-						None => {
-							return Expr::Error;
-						}
-					}
-				}
-			}
-
-			let mut fields = Vec::new();
-			let mut is_good = false;
-			while let Some(token) = self.peek_one() {
-				if token.kind == TokenType::RBrace {
-					self.next();
-					is_good = true;
-					break;
-				}
-
-				let name_type = match self.parse_ident_type() {
-					Some(name_type) => name_type,
-					None => {
-						self.skip_until(&[(TokenType::Semicolon, 0)]);
-						return Expr::Error;
-					}
-				};
-
-				fields.push(name_type);
-
-				match self.expect(&[TokenType::Comma, TokenType::RBrace]) {
-					Some(token) => {
-						if token.kind == TokenType::RBrace {
-							is_good = true;
-							break;
-						}
-					}
-					None => {
-						return Expr::Struct {name, fields};
-					}
-				}
-			}
-
-			if !is_good {
-				self.emitter.error()
-					.with_label("expected '}' but found eof")
-					.with_eoi_span()
-					.emit();
-				self.has_error = true;
-			}
-
-			return Expr::Struct {name, fields};
-		}
-		else if token.kind == TokenType::LParen {
-			self.next();
-
-			let mut skip_signature = false;
-			if let Some(token) = self.peek_one() {
-				if let TokenType::Identifier(_) = token.kind {}
-				else if token.kind == TokenType::LBrace {
-					self.emitter.error()
-						.with_label(format!("expected ')' but got {}", token.kind))
-						.with_span(token.span)
-						.emit();
-					self.has_error = true;
-					skip_signature = true;
-				}
-			}
-
-			let mut args = Vec::new();
-			if !skip_signature {
-				while let Some(token) = self.peek_one() {
-					if token.kind == TokenType::RParen {
-						self.next();
-						break;
-					}
-
-					let name_type = match self.parse_ident_type() {
-						Some(name_type) => name_type,
-						None => return Expr::Error
-					};
-
-					args.push(name_type);
-
-					match self.expect(&[TokenType::Comma, TokenType::RParen]) {
-						Some(token) => {
-							if token.kind == TokenType::RParen {
-								break;
-							}
-						}
-						None => {
-							if let Some(token) = self.peek_one() {
-								if let TokenType::Identifier(_) = token.kind {}
-								else {
-									break;
-								}
-							}
-						}
-					}
-				}
-			}
-
-			let mut ret_type = (String::new(), 0..0);
-			if let Some(token) = self.peek_one() {
-				if token.kind == TokenType::Arrow {
-					self.next();
-
-					let r#type = match self.parse_ident("a type") {
-						Some(ident) => ident,
-						None => {
-							if let Some(token) = self.peek_one() {
-								if token.kind != TokenType::Comma {
-									return Expr::Assign {target: Box::new(target),
-										value: Box::new(Expr::Error)}
-								}
-								else {
-									(String::new(), 0..0)
-								}
-							}
-							else {
-								return Expr::Assign {target: Box::new(target),
-									value: Box::new(Expr::Error)}
-							}
-						}
-					};
-
-					ret_type = r#type;
-				}
-			}
-
-			let s = self.expect(&[TokenType::LBrace, TokenType::Semicolon]);
-			match s {
-				Some(s) => {
-					if s.kind == TokenType::Semicolon {
-						return Expr::Function {name, args, ret_type, body: None};
-					}
-				}
-				None => {
-					return Expr::Function {name, args, ret_type, body: None};
-				}
-			}
-
-			let mut body = Vec::new();
-			while let Some(token) = self.peek_one() {
-				if token.kind == TokenType::RBrace {
-					break;
-				}
-
-				body.push(self.parse_expression());
-			}
-
-			self.expect(&[TokenType::RBrace]);
-
-			return Expr::Function {name, args, ret_type, body: Some(body)};
-		}
-		else if token.kind == TokenType::RParen {
-			self.next();
-			self.emitter.error()
-				.with_label(format!("expected '(' but got {}", token.kind))
-				.with_span(token.span)
-				.emit();
-			self.has_error = true;
-			if let Some(token) = self.expect(&[TokenType::Semicolon, TokenType::LBrace]) {
-				if token.kind == TokenType::Semicolon {
-					return Expr::Error;
-				}
-				else {
-					self.skip_until(&[(TokenType::RBrace, 0)]);
-					return Expr::Error;
-				}
-			}
-			else {
-				self.skip_until(&[(TokenType::RBrace, 0)]);
-				return Expr::Error;
-			}
-		}
-		else {
-			let value = self.parse_atom();
-			self.expect(&[TokenType::Semicolon]);
-			Expr::Assign {target: Box::new(target), value: Box::new(value)}
-		}
-
-	}
-
-	fn parse_vardecl(&mut self, name: Spanned<String>) -> Expr {
-		self.next();
-
-		let r#type = match self.parse_ident("a type") {
-			Some(ident) => ident,
-			None => {
-				return Expr::Error;
-			}
-		};
-
-		let s = self.expect(&[TokenType::Equals, TokenType::Semicolon]);
-		if let Some(s) = s {
-			if s.kind == TokenType::Equals {
-				let value = self.parse_atom();
-				self.expect(&[TokenType::Semicolon]);
-				Expr::VarDecl {name, r#type, value: Some(Box::new(value))}
-			}
-			else {
-				Expr::VarDecl {name, r#type, value: None}
-			}
-		}
-		else {
-			Expr::VarDecl {name, r#type, value: None}
-		}
-	}
-
-	fn parse_atom(&mut self) -> Expr {
-		let primary = match self.parse_primary() {
-			Some(expr) => expr,
-			None => {
-				match self.peek_one() {
-					Some(token) => {
-						self.next();
-						self.emitter.error()
-							.with_label(format!("expected a primary expression but got {}", token.kind))
-							.with_span(token.span)
-							.emit();
-						self.has_error = true;
-						return Expr::Error;
-					}
-					None => {
-						self.emitter.error()
-							.with_label("expected a primary expression but found eof")
-							.with_eoi_span()
-							.emit();
-						self.has_error = true;
-						return Expr::Error;
-					}
-				}
-			}
-		};
-
-		let token = match self.peek_one() {
-			Some(token) => token,
-			None => {
-				return primary;
-			}
-		};
-
-		if let TokenType::BinOp(_) = token.kind {
-			self.parse_binexp(primary, 0)
-		}
-		else {
-			primary
-		}
-	}
-
-	fn parse_expression(&mut self) -> Expr {
-		let primary = match self.parse_primary() {
-			Some(token) => token,
-			None => {
-				match self.peek_one() {
-					Some(token) => {
-						if token.kind == TokenType::Ret {
-							self.next();
-							if let Some(token) = self.peek_one() {
-								if token.kind == TokenType::Semicolon {
-									self.next();
-									return Expr::Ret {value: None};
-								}
-							}
-							let value = self.parse_atom();
-							self.expect(&[TokenType::Semicolon]);
-							return Expr::Ret {value: Some(Box::new(value))};
-						}
-
-						self.next();
-						self.emitter.error()
-							.with_label(format!("expected a primary expression but got {}", token.kind))
-							.with_span(token.span)
-							.emit();
-						self.has_error = true;
-						return Expr::Error;
-					}
-					None => {
-						self.emitter.error()
-							.with_label("expected a primary expression but found eof")
-							.with_eoi_span()
-							.emit();
-						self.has_error = true;
-						return Expr::Error;
-					}
-				}
-			}
-		};
-
-		let token = match self.peek_one() {
-			Some(token) => token,
-			None => {
-				self.emitter.error()
-					.with_label("expected an expression but found eof")
-					.with_eoi_span()
-					.emit();
-				self.has_error = true;
-				return Expr::Error;
-			}
-		};
-
-		match token.kind {
-			TokenType::BinOp(_) => self.parse_binexp(primary, 0),
-			TokenType::Equals => self.parse_assign(primary),
-			TokenType::Colon => {
-				if let Expr::Var(var) = primary {
-					self.parse_vardecl(var)
-				}
-				else {
-					self.emitter.error()
-						.with_label("expected an identifier before ':'")
-						.with_span(token.span)
-						.emit();
-					self.has_error = true;
-					Expr::Error
-				}
-			},
-			t => todo!("{}", t)
-		}
-	}
-
-	fn has_eof(&mut self) -> bool {
-		self.lexer.peek(PeekCount::One).is_none()
-	}
-
-	fn parse_toplevel_decl(&mut self) -> Expr {
-		self.parse_expression()
-	}
-
-	pub fn parse(&mut self) -> Vec<Expr> {
-		let mut ast = Vec::new();
-		while !self.has_eof() {
-			ast.push(self.parse_toplevel_decl());
-		}
-
-		ast
-	}
+		}).labelled(label)
 }
